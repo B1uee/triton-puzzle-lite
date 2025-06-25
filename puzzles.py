@@ -104,7 +104,9 @@ tl.load use mask: i < 4 and j < 3.
 @triton.jit
 def demo2(x_ptr):
     i_range = tl.arange(0, 8)[:, None]
+    #print(i_range)
     j_range = tl.arange(0, 4)[None, :]
+    #print(j_range)
     range = i_range * 4 + j_range
     # print works in the interpreter
     print(range)
@@ -216,6 +218,8 @@ def add_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     off_x = tl.arange(0, B0)
     x = tl.load(x_ptr + off_x)
     # Finish me!
+    x = x + 10
+    z = tl.store(z_ptr+off_x, x)
     return
 
 
@@ -237,6 +241,11 @@ def add2_spec(x: Float32[200,]) -> Float32[200,]:
 @triton.jit
 def add_mask2_kernel(x_ptr, z_ptr, N0, B0: tl.constexpr):
     # Finish me!
+    b_id = tl.program_id(0)
+    off_x = tl.arange(0, B0) + b_id * B0
+    x = tl.load(x_ptr+off_x, off_x < N0)
+    x = x + 10
+    tl.store(z_ptr+off_x, x, off_x < N0)
     return
 
 
@@ -260,6 +269,16 @@ def add_vec_spec(x: Float32[32,], y: Float32[32,]) -> Float32[32, 32]:
 @triton.jit
 def add_vec_kernel(x_ptr, y_ptr, z_ptr, N0, N1, B0: tl.constexpr, B1: tl.constexpr):
     # Finish me!
+    off_i = tl.arange(0, B0)[None, :]
+    off_j = tl.arange(0, B1)[:, None]
+    off_z = off_j * B0 + off_i
+    print(off_z)
+    x = tl.load(x_ptr+off_i)
+    y = tl.load(y_ptr+off_j)
+    print(x)
+    print(y)
+    z = x + y
+    tl.store(z_ptr+off_z, z)
     return
 
 
@@ -287,6 +306,13 @@ def add_vec_block_kernel(
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
     # Finish me!
+    off_i = block_id_x * B0 + tl.arange(0, B0)[None, :]
+    off_j = block_id_y * B1 + tl.arange(0, B1)[:, None]
+    off_z = off_j * N0 + off_i
+    x = tl.load(x_ptr+off_i, off_i < N0)
+    y = tl.load(y_ptr+off_j, off_j < N1)
+    z = x + y
+    tl.store(z_ptr+off_z, z, (off_i < N0)&(off_j < N1))
     return
 
 
@@ -314,6 +340,14 @@ def mul_relu_block_kernel(
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
     # Finish me!
+    off_x = block_id_x * B0 + tl.arange(0, B0)[None, :]
+    off_y = block_id_y * B1 + tl.arange(0, B1)[:, None]
+    off_z = off_y * N0 + off_x
+    x = tl.load(x_ptr+off_x, off_x < N0)
+    y = tl.load(y_ptr+off_y, off_y < N1)
+    z = x * y
+    relu_z = tl.where(z > 0, z, 0)
+    tl.store(z_ptr+off_z, relu_z, (off_x < N0)&(off_y < N1))
     return
 
 
@@ -354,6 +388,22 @@ def mul_relu_block_back_kernel(
     block_id_i = tl.program_id(0)
     block_id_j = tl.program_id(1)
     # Finish me!
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    off_j = block_id_j * B1 + tl.arange(0, B1)
+    off_ji = off_j[:, None] * N0 + off_i[None, :]
+
+    mask_i = off_i < N0
+    mask_j = off_j < N1
+    mask_ji = mask_j[:, None] & mask_i[None, :]
+
+    x = tl.load(x_ptr + off_ji, mask=mask_ji)
+    y = tl.load(y_ptr + off_j, mask=mask_j)
+    dz = tl.load(dz_ptr + off_ji, mask=mask_ji)
+
+    df_x = tl.where(x*y[:,None] > 0, y[:, None], 0)
+    dx = df_x * dz
+
+    tl.store(dx_ptr+off_ji, dx, mask = mask_ji)
     return
 
 
