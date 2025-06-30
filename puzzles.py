@@ -429,6 +429,25 @@ def sum_spec(x: Float32[4, 200]) -> Float32[4,]:
 @triton.jit
 def sum_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     # Finish me!
+    # Float32[4,] 返回的是一维向量
+    b_id = tl.program_id(0)
+    off_i = b_id * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+    #z = tl.zeros([B0, 1], dtype=tl.float32)
+    # Float32[4,] 返回的是一维向量，因此在初始化时不要用二维
+    z = tl.zeros([B0], dtype=tl.float32)
+    
+    print(f"init z: {z}, z.shape: {z.shape}")
+    for id_j in range(0, T, B1):
+        off_j = tl.arange(0, B1) + id_j
+        mask_j = off_j < T
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr+off_ij, mask = mask_ij)
+        z += tl.sum(x, axis = 1) # 这里返回的也是一维
+
+    print(f"z: {z}, z.shape: {z.shape}")
+    tl.store(z_ptr+off_i, z, mask = mask_i)
     return
 
 
@@ -470,6 +489,40 @@ def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
     # Finish me!
+
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+
+    exp_sum = tl.zeros([B0], dtype=tl.float32)
+    x_max = tl.full([B0], -float("inf"), dtype=tl.float32)
+    new_x_max = tl.full((B0,), -float("inf"), dtype=tl.float32)
+
+    for id_j in tl.range(0, T, B1):
+        off_j = id_j + tl.arange(0, B1)
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask=mask_ij)
+
+        # exp(x-new_max)=exp(x-old_max+old_max-new_max)=exp(x-old_max)*exp(old_max-new_max)
+  
+        new_x_max = tl.maximum(x_max, tl.max(x, axis=1))
+        new_exp_x = tl.exp2(log2_e * (x - new_x_max[:, None]))
+        factor = tl.exp2(log2_e * (x_max - new_x_max))
+        # 用分块的思维看待，与原版推导的单元素为单位略有差异
+        exp_sum = exp_sum * factor + tl.sum(new_exp_x, axis=1) 
+        x_max = new_x_max
+
+    for id_j in tl.range(0, T, B1):
+        off_j = id_j + tl.arange(0, B1)
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask=mask_ij)
+        exp_x = tl.exp2(log2_e * (x - x_max[:, None]))
+        z = exp_x / exp_sum[:, None]
+        tl.store(z_ptr + off_ij, z, mask=mask_ij)
+    
     return
 
 
@@ -481,6 +534,38 @@ def softmax_kernel_brute_force(
     block_id_i = tl.program_id(0)
     log2_e = 1.44269504
     # Finish me!
+    off_i = block_id_i * B0 + tl.arange(0, B0)
+    mask_i = off_i < N0
+    max_ = tl.zeros([B0], dtype = tl.float32)
+    sum_ = tl.zeros([B0], dtype = tl.float32)
+
+    for id_j in range(0, T, B1):
+        off_j = id_j + tl.arange(0, B1)
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask = mask_ij)
+        max_ = tl.maximum(max_, tl.max(x, axis=1))
+
+    for id_j in range(0, T, B1):
+        off_j = id_j + tl.arange(0, B1)
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask = mask_ij)
+        exp_x = tl.exp2(log2_e * (x - max_[:, None]))
+        sum_ += tl.sum(exp_x, axis=1)
+    
+    for id_j in range(0, T, B1):
+        off_j = id_j + tl.arange(0, B1)
+        off_ij = off_i[:, None] * T + off_j[None, :]
+        mask_j = off_j < T
+        mask_ij = mask_i[:, None] & mask_j[None, :]
+        x = tl.load(x_ptr + off_ij, mask = mask_ij)
+        exp_x = tl.exp2(log2_e * (x - max_[:, None]))
+        z = exp_x / sum_[:,None]
+        tl.store(z_ptr+off_ij, z, mask = mask_ij)
+
     return
 
 
